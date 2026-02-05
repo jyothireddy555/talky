@@ -210,7 +210,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             initiator: data['initiator'],
             socket: socket,
             peerId: data['peerId'],
-            onStatsRefresh: _loadUserStats,
           ),
         ),
       ).then((_) {
@@ -481,7 +480,6 @@ class CallPage extends StatefulWidget {
   final bool initiator;
   final IO.Socket socket;
   final int peerId;
-  final VoidCallback onStatsRefresh;   // ⭐ ADD
 
   const CallPage({
     super.key,
@@ -489,9 +487,7 @@ class CallPage extends StatefulWidget {
     required this.initiator,
     required this.socket,
     required this.peerId,
-    required this.onStatsRefresh,      // ⭐ ADD
   });
-
 
   @override
   State<CallPage> createState() => _CallPageState();
@@ -690,6 +686,8 @@ class _CallPageState extends State<CallPage> {
   }
 
   Future<void> _setupWebRTC() async {
+
+    _localStream = await navigator.mediaDevices.getUserMedia({'audio': true, 'video': false});
     final config = {
       'iceServers': [
         {
@@ -708,7 +706,9 @@ class _CallPageState extends State<CallPage> {
       ],
       'sdpSemantics': 'unified-plan',
     };
-
+    _peer = await createPeerConnection(config);
+    Helper.setSpeakerphoneOn(false);
+    _localStream!.getTracks().forEach((track) => _peer!.addTrack(track, _localStream!));
     _peer = await createPeerConnection(config);
     _localStream = await navigator.mediaDevices.getUserMedia({'audio': true, 'video': false});
     _localStream!.getTracks().forEach((track) => _peer!.addTrack(track, _localStream!));
@@ -735,9 +735,8 @@ class _CallPageState extends State<CallPage> {
       }
     };
 
-    widget.socket.on('signal', (payload) async {
+    widget.socket.on('signal', (data) async {
       try {
-        final data = payload['data'];
         if (data['type'] == 'offer') {
           await _peer!.setRemoteDescription(RTCSessionDescription(data['sdp'], 'offer'));
           final answer = await _peer!.createAnswer();
@@ -784,6 +783,7 @@ class _CallPageState extends State<CallPage> {
       _showReviewDialog(); // ALWAYS show for both users
     }
   }
+
   void _showReviewDialog() {
     showDialog(
       context: context,
@@ -791,15 +791,13 @@ class _CallPageState extends State<CallPage> {
       builder: (context) => ReviewDialog(
         peerId: widget.peerId,
         callDuration: _callDuration.inSeconds,
-        onStatsRefresh: widget.onStatsRefresh, // ⭐ IMPORTANT
         onComplete: () {
-          Navigator.of(context).pop(); // close dialog
-          Navigator.of(context).pop(); // close call page
+          Navigator.of(context).pop(); // Close dialog
+          Navigator.of(context).pop(); // Close call page
         },
       ),
     );
   }
-
 
   void _toggleMic() {
     setState(() => _micEnabled = !_micEnabled);
@@ -807,7 +805,10 @@ class _CallPageState extends State<CallPage> {
   }
 
   void _toggleSpeaker() {
-    setState(() => _speakerEnabled = !_speakerEnabled);
+    setState(() {
+      _speakerEnabled = !_speakerEnabled;
+    });
+    // This helper from the flutter_webrtc package controls the routing
     Helper.setSpeakerphoneOn(_speakerEnabled);
   }
 
@@ -995,25 +996,21 @@ class ReviewDialog extends StatefulWidget {
   final int peerId;
   final int callDuration;
   final VoidCallback onComplete;
-  final VoidCallback onStatsRefresh;
 
   const ReviewDialog({
     super.key,
     required this.peerId,
     required this.callDuration,
     required this.onComplete,
-    required this.onStatsRefresh,
   });
 
   @override
   State<ReviewDialog> createState() => _ReviewDialogState();
 }
 
-
 class _ReviewDialogState extends State<ReviewDialog> {
   int selectedRating = 5;
   bool isSubmitting = false;
-
 
   Future<void> _submitRating() async {
     setState(() => isSubmitting = true);
@@ -1032,7 +1029,7 @@ class _ReviewDialogState extends State<ReviewDialog> {
           'callDuration': widget.callDuration,
         }),
       );
-      widget.onStatsRefresh();
+
       widget.onComplete();
     } catch (e) {
       debugPrint("Error submitting review: $e");
